@@ -1,12 +1,49 @@
 import pandas as pd
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Tuple
 import re
+from ..models import TimePeriod, UserEstimate
 
 class AnalyticsService:
     def __init__(self):
         pass
+    
+    def determine_time_period(self, df: pd.DataFrame) -> TimePeriod:
+        """Determine the time period of the data"""
+        start_date = df['DateTime'].min()
+        end_date = df['DateTime'].max()
+        total_days = (end_date - start_date).days + 1
+        
+        if total_days <= 7:
+            period_type = "weekly"
+        elif total_days <= 31:
+            period_type = "monthly"
+        else:
+            period_type = "yearly"
+            
+        return TimePeriod(
+            start_date=start_date,
+            end_date=end_date,
+            period_type=period_type,
+            total_days=total_days
+        )
+
+    def calculate_user_estimate(self, df: pd.DataFrame, estimated_trips_per_week: int, time_period: TimePeriod) -> UserEstimate:
+        """Calculate user estimate accuracy"""
+        total_trips = df['JourneyId'].nunique()
+        total_weeks = time_period.total_days / 7
+        actual_trips_per_week = total_trips / total_weeks
+        
+        accuracy_percentage = 100 - min(100, abs(
+            ((actual_trips_per_week - estimated_trips_per_week) / estimated_trips_per_week) * 100
+        ))
+        
+        return UserEstimate(
+            estimated_trips_per_week=estimated_trips_per_week,
+            actual_trips_per_week=actual_trips_per_week,
+            accuracy_percentage=accuracy_percentage
+        )
     
     def process_csv(self, file_content: bytes) -> pd.DataFrame:
         """Process the CSV file and return a DataFrame"""
@@ -343,9 +380,10 @@ class AnalyticsService:
             "details": missing_details[:10]  # Limit to 10 details
         }
     
-    def generate_compass_wrapped(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Generate complete Compass Wrapped statistics"""
-        # Calculate all statistics
+    def generate_compass_wrapped(self, df: pd.DataFrame, estimated_trips_per_week: int = None) -> Dict[str, Any]:
+        """Generate complete Compass Wrapped analysis"""
+        time_period = self.determine_time_period(df)
+        
         total_stats = self.calculate_total_stats(df)
         route_stats = self.calculate_route_stats(df)
         time_stats = self.calculate_time_stats(df)
@@ -354,13 +392,18 @@ class AnalyticsService:
         achievements = self.calculate_achievements(df)
         missing_taps = self.find_missing_taps(df)
         
-        # Combine all results
+        user_estimate = None
+        if estimated_trips_per_week is not None:
+            user_estimate = self.calculate_user_estimate(df, estimated_trips_per_week, time_period)
+        
         return {
+            "time_period": time_period.dict(),
             "total_stats": total_stats,
             "route_stats": route_stats,
             "time_stats": time_stats,
             "transfer_stats": transfer_stats,
             "personality": personality,
             "achievements": achievements,
-            "missing_taps": missing_taps
+            "missing_taps": missing_taps,
+            "user_estimate": user_estimate.dict() if user_estimate else None
         } 

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
-from ..models import UserStats, TransitPersonality, UserStatsResponse
+from ..models import UserStats, TransitPersonality, UserStatsResponse, ComparisonStats
 import numpy as np
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -22,68 +22,111 @@ class UserStatsService:
             return UserStats(**stats)
         return None
 
-    async def calculate_percentiles(self, total_trips: int, total_hours: float) -> dict:
-        # Get all stats for comparison
-        all_stats = await self.stats_collection.find().to_list(length=None)
+    async def calculate_comparison_stats(self, stats: UserStats) -> ComparisonStats:
+        # Get all stats for the same period type
+        all_stats = await self.stats_collection.find({
+            "time_period.period_type": stats.time_period.period_type
+        }).to_list(length=None)
         
         if not all_stats:
-            return {"trips_percentile": 50, "hours_percentile": 50}
-
-        all_trips = [stat['total_trips'] for stat in all_stats]
-        all_hours = [stat['total_hours'] for stat in all_stats]
-
-        trips_percentile = np.percentile(all_trips, total_trips)
-        hours_percentile = np.percentile(all_hours, total_hours)
-
-        return {
-            "trips_percentile": float(trips_percentile),
-            "hours_percentile": float(hours_percentile)
-        }
-
-    def determine_personality(self, trips_percentile: float) -> TransitPersonality:
-        if trips_percentile >= 90:
-            return TransitPersonality(
-                type="Transit Veteran",
-                description="You're a true transit champion! Your dedication to public transportation is remarkable.",
-                percentile=trips_percentile
+            return ComparisonStats(
+                percentile=50,
+                average_trips_per_week=stats.total_trips / (stats.time_period.total_days / 7),
+                comparison_message="Not enough data for comparison yet"
             )
-        elif trips_percentile >= 70:
-            return TransitPersonality(
-                type="Frequent Rider",
-                description="You're a seasoned transit user who knows their way around the system.",
-                percentile=trips_percentile
-            )
-        elif trips_percentile >= 40:
-            return TransitPersonality(
-                type="Regular Commuter",
-                description="You're a reliable transit user making good use of the system.",
-                percentile=trips_percentile
-            )
-        elif trips_percentile >= 20:
-            return TransitPersonality(
-                type="Casual Rider",
-                description="You use transit occasionally and are building your experience.",
-                percentile=trips_percentile
-            )
+
+        # Calculate trips per week for comparison
+        current_trips_per_week = stats.total_trips / (stats.time_period.total_days / 7)
+        all_trips_per_week = [
+            s['total_trips'] / (s['time_period']['total_days'] / 7) 
+            for s in all_stats
+        ]
+
+        percentile = float(np.percentile(all_trips_per_week, current_trips_per_week))
+        
+        # Generate comparison message
+        comparison_message = self._generate_comparison_message(
+            stats.user_estimate.estimated_trips_per_week if stats.user_estimate else None,
+            current_trips_per_week
+        )
+
+        return ComparisonStats(
+            percentile=percentile,
+            average_trips_per_week=current_trips_per_week,
+            comparison_message=comparison_message
+        )
+
+    def _generate_comparison_message(self, estimated: Optional[int], actual: float) -> str:
+        if not estimated:
+            return f"You take {actual:.1f} trips per week on average"
+        
+        difference_percent = ((actual - estimated) / estimated) * 100
+        if abs(difference_percent) < 10:
+            return "Your estimate was spot on!"
+        elif difference_percent > 0:
+            return f"You take {abs(difference_percent):.0f}% more trips than you estimated!"
         else:
-            return TransitPersonality(
-                type="Transit Explorer",
-                description="You're just getting started with your transit journey!",
-                percentile=trips_percentile
-            )
+            return f"You take {abs(difference_percent):.0f}% fewer trips than you estimated!"
+
+    def determine_personality(self, percentile: float, estimate_accuracy: float = None) -> TransitPersonality:
+        personality_type = ""
+        description = ""
+        estimate_message = None
+
+        if percentile >= 90:
+            personality_type = "Transit Veteran"
+            description = "You're a true transit champion! Your dedication to public transportation is remarkable."
+        elif percentile >= 70:
+            personality_type = "Frequent Rider"
+            description = "You're a seasoned transit user who knows their way around the system."
+        elif percentile >= 40:
+            personality_type = "Regular Commuter"
+            description = "You're a reliable transit user making good use of the system."
+        elif percentile >= 20:
+            personality_type = "Casual Rider"
+            description = "You use transit occasionally and are building your experience."
+        else:
+            personality_type = "Transit Explorer"
+            description = "You're just getting started with your transit journey!"
+
+        if estimate_accuracy is not None:
+            if estimate_accuracy >= 90:
+                estimate_message = "You know your transit habits incredibly well!"
+            elif estimate_accuracy >= 70:
+                estimate_message = "You have a good sense of your transit usage."
+            else:
+                estimate_message = "Your actual usage is quite different from what you expected!"
+
+        return TransitPersonality(
+            type=personality_type,
+            description=description,
+            percentile=percentile,
+            estimate_accuracy=estimate_message
+        )
 
     async def process_user_stats(self, stats: UserStats) -> UserStatsResponse:
         # Save stats
         await self.save_user_stats(stats)
 
-        # Calculate percentiles
-        percentiles = await self.calculate_percentiles(stats.total_trips, stats.total_hours)
+        # Calculate comparison stats
+        comparison = await self.calculate_comparison_stats(stats)
+
+        # Calculate estimate accuracy if available
+        estimate_accuracy = None
+        if stats.user_estimate:
+            estimate_accuracy = 100 - min(100, abs(
+                ((stats.user_estimate.actual_trips_per_week - stats.user_estimate.estimated_trips_per_week) 
+                 / stats.user_estimate.estimated_trips_per_week) * 100
+            ))
 
         # Determine personality
-        personality = self.determine_personality(percentiles["trips_percentile"])
+        personality = self.determine_personality(
+            comparison.percentile,
+            estimate_accuracy
+        )
 
         return UserStatsResponse(
             stats=stats,
             personality=personality,
-            ranking=percentiles
+            comparison=comparison
         ) 

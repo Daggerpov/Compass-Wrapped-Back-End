@@ -39,8 +39,16 @@ app.include_router(stats.router)
 
 @app.get("/")
 async def root():
+    try:
+        # Ping MongoDB
+        await app.mongodb_client.admin.command('ping')
+        mongo_status = "Connected"
+    except Exception as e:
+        mongo_status = f"Error: {str(e)}"
+    
     return {
         "message": "Welcome to Compass Wrapped API",
         "docs": "/docs",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "mongodb_status": mongo_status
     } 
