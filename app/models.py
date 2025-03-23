@@ -1,6 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any, Literal
 from datetime import datetime
+from pydantic.json import timedelta_isoformat
 
 class TransitEvent(BaseModel):
     """Model representing a transit event (tap in, tap out, or transfer)"""
@@ -67,10 +68,19 @@ class Route(BaseModel):
     count: Optional[int] = None
 
 class TimePeriod(BaseModel):
-    start_date: datetime
-    end_date: datetime
+    start_date: str  # ISO format string
+    end_date: str    # ISO format string
     period_type: Literal["weekly", "monthly", "yearly"]
     total_days: int
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Validate ISO format strings
+        try:
+            datetime.fromisoformat(self.start_date.replace('Z', '+00:00'))
+            datetime.fromisoformat(self.end_date.replace('Z', '+00:00'))
+        except ValueError as e:
+            raise ValueError("Dates must be in ISO format") from e
 
 class UserEstimate(BaseModel):
     estimated_trips_per_week: int
@@ -86,7 +96,7 @@ class UserStats(BaseModel):
     top_routes: List[Route]
     time_period: TimePeriod
     user_estimate: Optional[UserEstimate] = None
-    created_at: datetime = datetime.now()
+    created_at: Optional[datetime] = None
 
     class Config:
         json_schema_extra = {
@@ -104,15 +114,10 @@ class UserStats(BaseModel):
                     {"route_name": "Expo Line", "count": 80}
                 ],
                 "time_period": {
-                    "start_date": "2023-01-01T00:00:00",
-                    "end_date": "2023-12-31T23:59:59",
+                    "start_date": "2023-01-01T00:00:00Z",
+                    "end_date": "2023-12-31T23:59:59Z",
                     "period_type": "yearly",
                     "total_days": 365
-                },
-                "user_estimate": {
-                    "estimated_trips_per_week": 10,
-                    "actual_trips_per_week": 12.5,
-                    "accuracy_percentage": 80.0
                 }
             }
         }
@@ -148,8 +153,8 @@ class UserStatsResponse(BaseModel):
                         {"route_name": "99 B-Line", "count": 120}
                     ],
                     "time_period": {
-                        "start_date": "2023-01-01T00:00:00",
-                        "end_date": "2023-12-31T23:59:59",
+                        "start_date": "2023-01-01T00:00:00Z",
+                        "end_date": "2023-12-31T23:59:59Z",
                         "period_type": "yearly",
                         "total_days": 365
                     }

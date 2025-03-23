@@ -13,6 +13,15 @@ class UserStatsService:
     async def save_user_stats(self, stats: UserStats) -> str:
         stats_dict = stats.dict()
         stats_dict['created_at'] = datetime.now()
+        
+        # Convert date strings to datetime objects for MongoDB
+        stats_dict['time_period']['start_date'] = datetime.fromisoformat(
+            stats_dict['time_period']['start_date'].replace('Z', '+00:00')
+        )
+        stats_dict['time_period']['end_date'] = datetime.fromisoformat(
+            stats_dict['time_period']['end_date'].replace('Z', '+00:00')
+        )
+        
         result = await self.stats_collection.insert_one(stats_dict)
         return str(result.inserted_id)
 
