@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, Query
 from fastapi.responses import JSONResponse
 import pandas as pd
 from typing import Dict, Any
@@ -13,13 +13,13 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-analytics_service = AnalyticsService()
-
 @router.post("/analyze/")
-async def analyze_compass_data(file: UploadFile = File(...)):
+async def analyze_compass_data(
+    file: UploadFile = File(...),
+    estimated_trips_per_week: int = Query(None, description="User's estimated number of trips per week")
+) -> dict:
     """
-    Process a Compass Card CSV file and return all analytics data at once.
-    Each analysis component is processed independently, so if one fails, the others will still be returned.
+    Upload a Compass Card CSV file to get comprehensive statistics
     """
     if not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="Only CSV files are allowed")
@@ -39,7 +39,7 @@ async def analyze_compass_data(file: UploadFile = File(...)):
     try:
         # Read file once
         contents = await file.read()
-        df = analytics_service.process_csv(contents)
+        df = AnalyticsService().process_csv(contents)
         
         # Update file info
         result["file_info"].update({
@@ -51,13 +51,13 @@ async def analyze_compass_data(file: UploadFile = File(...)):
         
         # Process each analysis component independently
         analysis_components = [
-            ("total_stats", analytics_service.calculate_total_stats),
-            ("route_stats", analytics_service.calculate_route_stats),
-            ("time_stats", analytics_service.calculate_time_stats),
-            ("transfer_stats", analytics_service.calculate_transfer_stats),
-            ("personality", analytics_service.determine_personality),
-            ("achievements", analytics_service.calculate_achievements),
-            ("missing_taps", analytics_service.find_missing_taps)
+            ("total_stats", AnalyticsService().calculate_total_stats),
+            ("route_stats", AnalyticsService().calculate_route_stats),
+            ("time_stats", AnalyticsService().calculate_time_stats),
+            ("transfer_stats", AnalyticsService().calculate_transfer_stats),
+            ("personality", AnalyticsService().determine_personality),
+            ("achievements", AnalyticsService().calculate_achievements),
+            ("missing_taps", AnalyticsService().find_missing_taps)
         ]
         
         # Process each component and handle exceptions
@@ -72,7 +72,8 @@ async def analyze_compass_data(file: UploadFile = File(...)):
                 logging.error(f"Error in {component_name}: {str(e)}")
                 logging.debug(traceback.format_exc())
         
-        return result
+        # Generate statistics
+        return AnalyticsService().generate_compass_wrapped(df, estimated_trips_per_week)
     
     except Exception as e:
         # Handle critical errors in file processing
