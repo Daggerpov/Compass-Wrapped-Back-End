@@ -1,18 +1,19 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
-import io
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+from .routers import stats
+from dotenv import load_dotenv
 
-# Import your router here
-from app.routers import analytics
+load_dotenv()
 
 app = FastAPI(
     title="Compass Wrapped API",
-    description="API for analyzing Compass Card transit data and generating comprehensive statistics",
+    description="API for analyzing Compass Card data and generating year in review statistics",
     version="1.0.0"
 )
 
-# Configure CORS
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, replace with specific origins
@@ -21,14 +22,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# MongoDB connection
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+
+@app.on_event("startup")
+async def startup_db_client():
+    app.mongodb_client = AsyncIOMotorClient(MONGODB_URL)
+    app.mongodb = app.mongodb_client.compass_wrapped
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    app.mongodb_client.close()
+
 # Include routers
-app.include_router(analytics.router)
+app.include_router(stats.router)
 
 @app.get("/")
 async def root():
     return {
         "message": "Welcome to Compass Wrapped API",
-        "endpoints": {
-            "analyze": "/analytics/analyze/ - Upload a CSV file to get all statistics at once"
-        }
+        "docs": "/docs",
+        "version": "1.0.0"
     } 
