@@ -4,6 +4,9 @@ from ..models import UserStats, TransitPersonality, UserStatsResponse, Compariso
 import numpy as np
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
+import logging
+
+logger = logging.getLogger(__name__)
 
 class UserStatsService:
     def __init__(self, db_client: AsyncIOMotorClient):
@@ -11,19 +14,30 @@ class UserStatsService:
         self.stats_collection = self.db.user_stats
 
     async def save_user_stats(self, stats: UserStats) -> str:
-        stats_dict = stats.dict()
-        stats_dict['created_at'] = datetime.now()
-        
-        # Convert date strings to datetime objects for MongoDB
-        stats_dict['time_period']['start_date'] = datetime.fromisoformat(
-            stats_dict['time_period']['start_date'].replace('Z', '+00:00')
-        )
-        stats_dict['time_period']['end_date'] = datetime.fromisoformat(
-            stats_dict['time_period']['end_date'].replace('Z', '+00:00')
-        )
-        
-        result = await self.stats_collection.insert_one(stats_dict)
-        return str(result.inserted_id)
+        try:
+            logger.info(f"Saving stats for user: {stats.user_id}")
+            stats_dict = stats.dict()
+            stats_dict['created_at'] = datetime.now()
+            
+            # Convert date strings to datetime objects for MongoDB
+            try:
+                stats_dict['time_period']['start_date'] = datetime.fromisoformat(
+                    stats_dict['time_period']['start_date'].replace('Z', '+00:00')
+                )
+                stats_dict['time_period']['end_date'] = datetime.fromisoformat(
+                    stats_dict['time_period']['end_date'].replace('Z', '+00:00')
+                )
+            except ValueError as e:
+                logger.error(f"Date parsing error: {e}")
+                logger.error(f"Input dates - start: {stats_dict['time_period']['start_date']}, end: {stats_dict['time_period']['end_date']}")
+                raise ValueError(f"Invalid date format: {e}")
+            
+            logger.info(f"Processed stats: {stats_dict}")
+            result = await self.stats_collection.insert_one(stats_dict)
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Error saving user stats: {e}")
+            raise
 
     async def get_user_stats(self, user_id: str) -> Optional[UserStats]:
         stats = await self.stats_collection.find_one({"user_id": user_id})
@@ -32,38 +46,45 @@ class UserStatsService:
         return None
 
     async def calculate_comparison_stats(self, stats: UserStats) -> ComparisonStats:
-        # Get all stats for the same period type
-        all_stats = await self.stats_collection.find({
-            "time_period.period_type": stats.time_period.period_type
-        }).to_list(length=None)
-        
-        if not all_stats:
-            return ComparisonStats(
-                percentile=50,
-                average_trips_per_week=stats.total_trips / (stats.time_period.total_days / 7),
-                comparison_message="Not enough data for comparison yet"
+        try:
+            logger.info("Calculating comparison stats")
+            # Get all stats for the same period type
+            all_stats = await self.stats_collection.find({
+                "time_period.period_type": stats.time_period.period_type
+            }).to_list(length=None)
+            
+            if not all_stats:
+                logger.info("No existing stats found for comparison")
+                return ComparisonStats(
+                    percentile=50,
+                    average_trips_per_week=stats.total_trips / (stats.time_period.total_days / 7),
+                    comparison_message="Not enough data for comparison yet"
+                )
+
+            # Calculate trips per week for comparison
+            current_trips_per_week = stats.total_trips / (stats.time_period.total_days / 7)
+            all_trips_per_week = [
+                s['total_trips'] / (s['time_period']['total_days'] / 7) 
+                for s in all_stats
+            ]
+
+            percentile = float(np.percentile(all_trips_per_week, current_trips_per_week))
+            logger.info(f"Calculated percentile: {percentile}")
+            
+            # Generate comparison message
+            comparison_message = self._generate_comparison_message(
+                stats.user_estimate.estimated_trips_per_week if stats.user_estimate else None,
+                current_trips_per_week
             )
 
-        # Calculate trips per week for comparison
-        current_trips_per_week = stats.total_trips / (stats.time_period.total_days / 7)
-        all_trips_per_week = [
-            s['total_trips'] / (s['time_period']['total_days'] / 7) 
-            for s in all_stats
-        ]
-
-        percentile = float(np.percentile(all_trips_per_week, current_trips_per_week))
-        
-        # Generate comparison message
-        comparison_message = self._generate_comparison_message(
-            stats.user_estimate.estimated_trips_per_week if stats.user_estimate else None,
-            current_trips_per_week
-        )
-
-        return ComparisonStats(
-            percentile=percentile,
-            average_trips_per_week=current_trips_per_week,
-            comparison_message=comparison_message
-        )
+            return ComparisonStats(
+                percentile=percentile,
+                average_trips_per_week=current_trips_per_week,
+                comparison_message=comparison_message
+            )
+        except Exception as e:
+            logger.error(f"Error calculating comparison stats: {e}")
+            raise
 
     def _generate_comparison_message(self, estimated: Optional[int], actual: float) -> str:
         if not estimated:
@@ -114,28 +135,35 @@ class UserStatsService:
         )
 
     async def process_user_stats(self, stats: UserStats) -> UserStatsResponse:
-        # Save stats
-        await self.save_user_stats(stats)
+        try:
+            logger.info("Processing user stats")
+            # Save stats
+            await self.save_user_stats(stats)
 
-        # Calculate comparison stats
-        comparison = await self.calculate_comparison_stats(stats)
+            # Calculate comparison stats
+            comparison = await self.calculate_comparison_stats(stats)
 
-        # Calculate estimate accuracy if available
-        estimate_accuracy = None
-        if stats.user_estimate:
-            estimate_accuracy = 100 - min(100, abs(
-                ((stats.user_estimate.actual_trips_per_week - stats.user_estimate.estimated_trips_per_week) 
-                 / stats.user_estimate.estimated_trips_per_week) * 100
-            ))
+            # Calculate estimate accuracy if available
+            estimate_accuracy = None
+            if stats.user_estimate:
+                estimate_accuracy = 100 - min(100, abs(
+                    ((stats.user_estimate.actual_trips_per_week - stats.user_estimate.estimated_trips_per_week) 
+                     / stats.user_estimate.estimated_trips_per_week) * 100
+                ))
 
-        # Determine personality
-        personality = self.determine_personality(
-            comparison.percentile,
-            estimate_accuracy
-        )
+            # Determine personality
+            personality = self.determine_personality(
+                comparison.percentile,
+                estimate_accuracy
+            )
 
-        return UserStatsResponse(
-            stats=stats,
-            personality=personality,
-            comparison=comparison
-        ) 
+            response = UserStatsResponse(
+                stats=stats,
+                personality=personality,
+                comparison=comparison
+            )
+            logger.info("Successfully processed user stats")
+            return response
+        except Exception as e:
+            logger.error(f"Error processing user stats: {e}")
+            raise 
