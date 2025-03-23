@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Literal
 from datetime import datetime
 
 class TransitEvent(BaseModel):
@@ -56,4 +56,114 @@ class CompassWrappedStats(BaseModel):
     transfer_stats: TransferStats
     personality: PersonalityType
     achievements: Achievements
-    missing_taps: MissingTaps 
+    missing_taps: MissingTaps
+
+class Stop(BaseModel):
+    stop_name: str
+    count: Optional[int] = None
+
+class Route(BaseModel):
+    route_name: str
+    count: Optional[int] = None
+
+class TimePeriod(BaseModel):
+    start_date: datetime
+    end_date: datetime
+    period_type: Literal["weekly", "monthly", "yearly"]
+    total_days: int
+
+class UserEstimate(BaseModel):
+    estimated_trips_per_week: int
+    actual_trips_per_week: float
+    accuracy_percentage: float
+
+class UserStats(BaseModel):
+    user_id: str  # Anonymized user identifier
+    total_trips: int
+    total_hours: float
+    most_used_transit: str  # e.g., "Bus", "SkyTrain", etc.
+    top_stops: List[Stop]
+    top_routes: List[Route]
+    time_period: TimePeriod
+    user_estimate: Optional[UserEstimate] = None
+    created_at: datetime = datetime.now()
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": "anon_123",
+                "total_trips": 245,
+                "total_hours": 194.5,
+                "most_used_transit": "SkyTrain",
+                "top_stops": [
+                    {"stop_name": "Broadway-City Hall Stn", "count": 76},
+                    {"stop_name": "UBC Loop", "count": 52}
+                ],
+                "top_routes": [
+                    {"route_name": "99 B-Line", "count": 120},
+                    {"route_name": "Expo Line", "count": 80}
+                ],
+                "time_period": {
+                    "start_date": "2023-01-01T00:00:00",
+                    "end_date": "2023-12-31T23:59:59",
+                    "period_type": "yearly",
+                    "total_days": 365
+                },
+                "user_estimate": {
+                    "estimated_trips_per_week": 10,
+                    "actual_trips_per_week": 12.5,
+                    "accuracy_percentage": 80.0
+                }
+            }
+        }
+
+class ComparisonStats(BaseModel):
+    percentile: float
+    average_trips_per_week: float
+    comparison_message: str
+
+class TransitPersonality(BaseModel):
+    type: str  # e.g., "Transit Veteran", "Casual Commuter", "Weekend Warrior"
+    description: str
+    percentile: float  # User's percentile among all users
+    estimate_accuracy: Optional[str] = None
+
+class UserStatsResponse(BaseModel):
+    stats: UserStats
+    personality: TransitPersonality
+    comparison: ComparisonStats
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "stats": {
+                    "user_id": "anon_123",
+                    "total_trips": 245,
+                    "total_hours": 194.5,
+                    "most_used_transit": "SkyTrain",
+                    "top_stops": [
+                        {"stop_name": "Broadway-City Hall Stn", "count": 76}
+                    ],
+                    "top_routes": [
+                        {"route_name": "99 B-Line", "count": 120}
+                    ],
+                    "time_period": {
+                        "start_date": "2023-01-01T00:00:00",
+                        "end_date": "2023-12-31T23:59:59",
+                        "period_type": "yearly",
+                        "total_days": 365
+                    }
+                },
+                "personality": {
+                    "type": "Transit Veteran",
+                    "description": "You're among the top transit users!",
+                    "percentile": 95.5,
+                    "estimate_accuracy": "Your estimate was spot on! You know your transit habits well."
+                },
+                "comparison": {
+                    "percentile": 95.5,
+                    "average_trips_per_week": 12.5,
+                    "comparison_message": "You take 25% more trips than you estimated!"
+                }
+            }
+        } 
